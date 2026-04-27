@@ -14,7 +14,7 @@ After building, copy the output to the vault and reload:
 
 ```bash
 cp main.js "/Users/markbulling/Documents/lepus albus/.obsidian/plugins/obsidian-fathom-sync/main.js"
-obsidian plugin:reload id=obsidian-fathom-sync
+obsidian plugin:reload id=fathom-sync
 ```
 
 Check for runtime errors after reloading:
