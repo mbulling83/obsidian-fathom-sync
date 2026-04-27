@@ -1,3 +1,9 @@
+.fathom-btn-connected {
+	background-color: var(--color-green) !important;
+	color: white !important;
+	border-color: var(--color-green) !important;
+}
+
 .fathom-meeting-suggestion {
 	display: flex;
 	flex-direction: column;

@@ -72,23 +72,27 @@ export class FathomSyncSettingTab extends PluginSettingTab {
 						await this.plugin.saveSettings();
 					}),
 			)
-			.addButton((btn) =>
+			.addButton((btn) => {
 				btn
 					.setButtonText("Test connection")
 					.setCta()
 					.onClick(async () => {
 						btn.setButtonText("Testing…").setDisabled(true);
+						btn.buttonEl.removeClass("fathom-btn-connected");
 						try {
 							const client = new FathomClient(this.plugin.settings.apiKey);
-							const result = await client.listMeetings({ includeSummary: false });
-							new Notice(`✓ Connected! Found ${result.items.length} recent meetings.`);
+							await client.listMeetings({ includeSummary: false });
+							btn.setButtonText("✓ Connected");
+							btn.buttonEl.addClass("fathom-btn-connected");
 						} catch (e) {
+							btn.setButtonText("Test connection").removeCta();
+							btn.setCta();
 							new Notice(`✗ Connection failed: ${e instanceof Error ? e.message : String(e)}`);
 						} finally {
-							btn.setButtonText("Test connection").setDisabled(false);
+							btn.setDisabled(false);
 						}
-					}),
-			);
+					});
+			});
 
 		new Setting(containerEl)
 			.setName("Sync folder")
