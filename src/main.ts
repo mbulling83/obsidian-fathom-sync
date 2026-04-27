@@ -20,7 +20,8 @@ import {
 
 export default class FathomSyncPlugin extends Plugin {
 	settings: FathomSyncSettings;
-	private autoSyncIntervalId: number | null = null;
+	// Raw window.setInterval ID so we can clearInterval it directly
+	private rawAutoSyncTimerId: number | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -78,16 +79,17 @@ export default class FathomSyncPlugin extends Plugin {
 		const minutes = this.settings.autoSyncIntervalMinutes;
 		if (minutes > 0 && this.settings.apiKey) {
 			const ms = minutes * 60 * 1000;
-			this.autoSyncIntervalId = this.registerInterval(
-				window.setInterval(() => this.syncAllMeetings(true), ms),
-			);
+			// Store raw timer ID so clearAutoSync can cancel it correctly.
+			// Also pass it through registerInterval so Obsidian cleans up on unload.
+			this.rawAutoSyncTimerId = window.setInterval(() => this.syncAllMeetings(true), ms);
+			this.registerInterval(this.rawAutoSyncTimerId);
 		}
 	}
 
 	private clearAutoSync() {
-		if (this.autoSyncIntervalId !== null) {
-			window.clearInterval(this.autoSyncIntervalId);
-			this.autoSyncIntervalId = null;
+		if (this.rawAutoSyncTimerId !== null) {
+			window.clearInterval(this.rawAutoSyncTimerId);
+			this.rawAutoSyncTimerId = null;
 		}
 	}
 
@@ -110,19 +112,25 @@ export default class FathomSyncPlugin extends Plugin {
 
 			loading?.update(`Fathom: Syncing ${meetings.length} meetings…`);
 
-			let synced = 0;
+			let created = 0;
+			let updated = 0;
 			let skipped = 0;
 
 			for (const meeting of meetings) {
-				const existed = await this.syncMeetingToNote(client, meeting);
-				if (existed) skipped++;
-				else synced++;
-				loading?.update(`Fathom: Synced ${synced}/${meetings.length}…`);
+				const result = await this.syncMeetingToNote(client, meeting);
+				if (result === "created") created++;
+				else if (result === "updated") updated++;
+				else skipped++;
+				loading?.update(`Fathom: Synced ${created + updated}/${meetings.length}…`);
 			}
 
 			loading?.close();
-			if (!silent || synced > 0) {
-				new Notice(`Fathom: Synced ${synced} new meetings (${skipped} already up to date).`);
+			if (!silent || created > 0 || updated > 0) {
+				const parts = [];
+				if (created > 0) parts.push(`${created} new`);
+				if (updated > 0) parts.push(`${updated} updated`);
+				if (skipped > 0) parts.push(`${skipped} unchanged`);
+				new Notice(`Fathom: ${parts.join(", ")} meetings synced.`);
 			}
 		} catch (e) {
 			loading?.close();
@@ -185,7 +193,7 @@ export default class FathomSyncPlugin extends Plugin {
 			loading.close();
 
 			if (action === "create-note") {
-				const file = await this.syncMeetingToNote(client, meeting, summary, transcript, true);
+				const file = await this.writeNoteFile(meeting, summary, transcript);
 				if (file) {
 					new Notice(`Created: ${file.name}`);
 					if (this.settings.openNoteAfterSync) {
@@ -196,7 +204,7 @@ export default class FathomSyncPlugin extends Plugin {
 				const bullets = meetingToBulletPoints(meeting, summary);
 				this.insertIntoEditor(editor, bullets);
 			} else if (action === "insert-bullets-and-link") {
-				const file = await this.syncMeetingToNote(client, meeting, summary, transcript);
+				const file = await this.writeNoteFile(meeting, summary, transcript);
 				const bullets = meetingToBulletPoints(meeting, summary);
 				const link = file ? `\n\t- Note: [[${file.basename}]]` : "";
 				this.insertIntoEditor(editor, bullets + link);
@@ -212,24 +220,23 @@ export default class FathomSyncPlugin extends Plugin {
 
 	// --- Core sync logic ---
 
+	// Returns "created" | "updated" | "skipped"
 	private async syncMeetingToNote(
 		client: FathomClient,
 		meeting: FathomMeeting,
 		summaryData?: FathomSummary | null,
 		transcriptData?: FathomTranscriptItem[] | null,
-		force = false,
-	): Promise<TFile | null> {
-		const filename = this.buildFilename(meeting);
+	): Promise<"created" | "updated" | "skipped"> {
+		const filePath = this.buildFilePath(meeting);
 		const folderPath = normalizePath(this.settings.syncFolder);
-		const filePath = normalizePath(`${folderPath}/${filename}.md`);
 
 		if (!this.app.vault.getAbstractFileByPath(folderPath)) {
 			await this.app.vault.createFolder(folderPath);
 		}
 
 		const existing = this.app.vault.getAbstractFileByPath(filePath);
-		if (existing instanceof TFile && !force) {
-			return existing;
+		if (existing instanceof TFile) {
+			return "skipped";
 		}
 
 		const summary =
@@ -244,32 +251,49 @@ export default class FathomSyncPlugin extends Plugin {
 				? await client.getMeetingTranscript(meeting.recording_id).catch(() => null)
 				: null;
 
-		const content = meetingToFullNote(meeting, summary, transcript);
+		await this.app.vault.create(filePath, meetingToFullNote(meeting, summary, transcript));
+		return "created";
+	}
 
+	// Writes (or overwrites) a note file, used for explicit user-triggered actions
+	private async writeNoteFile(
+		meeting: FathomMeeting,
+		summary: FathomSummary | null,
+		transcript: FathomTranscriptItem[] | null,
+	): Promise<TFile | null> {
+		const filePath = this.buildFilePath(meeting);
+		const folderPath = normalizePath(this.settings.syncFolder);
+
+		if (!this.app.vault.getAbstractFileByPath(folderPath)) {
+			await this.app.vault.createFolder(folderPath);
+		}
+
+		const content = meetingToFullNote(meeting, summary, transcript);
+		const existing = this.app.vault.getAbstractFileByPath(filePath);
 		if (existing instanceof TFile) {
 			await this.app.vault.modify(existing, content);
 			return existing;
-		} else {
-			return this.app.vault.create(filePath, content);
 		}
+		return this.app.vault.create(filePath, content);
 	}
 
-	private buildFilename(meeting: FathomMeeting): string {
+	private buildFilePath(meeting: FathomMeeting): string {
 		const date = formatMeetingDate(meeting);
-		const dateObj = new Date(meeting.recording_start_time ?? meeting.created_at);
-		const time = dateObj
-			.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
-			.replace(":", "-");
+		const raw = meeting.recording_start_time ?? meeting.created_at;
+		const dateObj = new Date(raw);
+		const hh = String(dateObj.getHours()).padStart(2, "0");
+		const mm = String(dateObj.getMinutes()).padStart(2, "0");
+		const time = `${hh}-${mm}`;
 		const title = meetingDisplayTitle(meeting)
 			.replace(/[\\/:*?"<>|]/g, "-")
 			.replace(/\s+/g, " ")
 			.trim();
-
-		return this.settings.filenameTemplate
+		const filename = this.settings.filenameTemplate
 			.replace("{{date}}", date)
 			.replace("{{time}}", time)
 			.replace("{{title}}", title)
 			.trim();
+		return normalizePath(`${this.settings.syncFolder}/${filename}.md`);
 	}
 
 	// --- Helpers ---

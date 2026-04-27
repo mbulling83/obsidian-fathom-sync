@@ -51,10 +51,10 @@ export interface FathomMeeting {
 	url: string;
 	share_url: string;
 	created_at: string;
-	scheduled_start_time: string;
-	scheduled_end_time: string;
-	recording_start_time: string;
-	recording_end_time: string;
+	scheduled_start_time: string | null;
+	scheduled_end_time: string | null;
+	recording_start_time: string | null;
+	recording_end_time: string | null;
 	calendar_invitees_domains_type: "only_internal" | "one_or_more_external";
 	recorded_by: FathomUser;
 	transcript_language: string;
@@ -95,23 +95,31 @@ export class FathomClient {
 			}
 		}
 
-		const response = await requestUrl({
-			url: url.toString(),
-			method: "GET",
-			headers: {
-				"X-Api-Key": this.apiKey,
-				"Content-Type": "application/json",
-			},
-		});
+		try {
+			const response = await requestUrl({
+				url: url.toString(),
+				method: "GET",
+				headers: { "X-Api-Key": this.apiKey },
+				throw: false,
+			});
 
-		if (response.status < 200 || response.status >= 300) {
+			if (response.status < 200 || response.status >= 300) {
+				throw new FathomApiError(
+					`Fathom API error ${response.status}: ${response.text || "Unknown error"}`,
+					response.status,
+				);
+			}
+
+			return response.json as T;
+		} catch (e) {
+			if (e instanceof FathomApiError) throw e;
+			// Obsidian throws an error with a status property on network failure
+			const status = (e as { status?: number }).status ?? 0;
 			throw new FathomApiError(
-				`Fathom API error ${response.status}: ${response.text || "Unknown error"}`,
-				response.status,
+				status ? `Fathom API error ${status}` : `Network error: ${(e as Error).message}`,
+				status,
 			);
 		}
-
-		return response.json as T;
 	}
 
 	async listMeetings(options: {
@@ -177,18 +185,22 @@ export class FathomClient {
 }
 
 export function formatMeetingDate(meeting: FathomMeeting): string {
-	const date = new Date(meeting.recording_start_time ?? meeting.created_at);
+	const raw = meeting.recording_start_time ?? meeting.created_at;
+	const date = new Date(raw);
 	return date.toISOString().split("T")[0] ?? "";
 }
 
 export function formatMeetingTime(meeting: FathomMeeting): string {
-	const date = new Date(meeting.recording_start_time ?? meeting.created_at);
+	const raw = meeting.recording_start_time ?? meeting.created_at;
+	const date = new Date(raw);
 	return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 export function formatDuration(meeting: FathomMeeting): string {
+	if (!meeting.recording_start_time || !meeting.recording_end_time) return "";
 	const start = new Date(meeting.recording_start_time).getTime();
 	const end = new Date(meeting.recording_end_time).getTime();
+	if (isNaN(start) || isNaN(end) || end <= start) return "";
 	const totalSeconds = Math.round((end - start) / 1000);
 	const h = Math.floor(totalSeconds / 3600);
 	const m = Math.floor((totalSeconds % 3600) / 60);
@@ -198,6 +210,21 @@ export function formatDuration(meeting: FathomMeeting): string {
 
 export function meetingDisplayTitle(meeting: FathomMeeting): string {
 	return meeting.title || meeting.meeting_title || "Untitled Meeting";
+}
+
+function yamlQuote(value: string): string {
+	// Quote if value contains characters that would break YAML
+	if (/[:#\[\]{},&*!|>'"%@`\n]/.test(value) || value.trim() !== value) {
+		return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+	}
+	return value;
+}
+
+function stripMarkdown(text: string): string {
+	return text
+		.replace(/[*_~`#>\[\]]/g, "")
+		.replace(/\s+/g, " ")
+		.trim();
 }
 
 export function meetingToFullNote(
@@ -216,17 +243,18 @@ export function meetingToFullNote(
 	lines.push("");
 	lines.push("---");
 	lines.push(`date: ${date}`);
-	lines.push(`time: ${time}`);
-	lines.push(`duration: ${duration}`);
+	lines.push(`time: ${yamlQuote(time)}`);
+	if (duration) lines.push(`duration: ${duration}`);
 	const inviteeNames = meeting.calendar_invitees
 		.map((i) => i.name ?? i.email ?? "Unknown")
 		.filter(Boolean);
 	if (inviteeNames.length > 0) {
-		lines.push(`attendees: [${inviteeNames.join(", ")}]`);
+		const quotedNames = inviteeNames.map(yamlQuote).join(", ");
+		lines.push(`attendees: [${quotedNames}]`);
 	}
-	lines.push(`recorded_by: ${meeting.recorded_by.name}`);
+	lines.push(`recorded_by: ${yamlQuote(meeting.recorded_by.name)}`);
 	lines.push(`fathom_id: ${meeting.recording_id}`);
-	lines.push(`fathom_url: ${meeting.url}`);
+	lines.push(`fathom_url: ${yamlQuote(meeting.url)}`);
 	lines.push("---");
 	lines.push("");
 
@@ -284,10 +312,11 @@ export function meetingToBulletPoints(
 	const time = formatMeetingTime(meeting);
 	const duration = formatDuration(meeting);
 	const title = meetingDisplayTitle(meeting);
+	const durationStr = duration ? ` (${duration})` : "";
 
 	const lines: string[] = [];
 
-	lines.push(`- **${title}** — ${date} at ${time} (${duration})`);
+	lines.push(`- **${title}** — ${date} at ${time}${durationStr}`);
 
 	const names = meeting.calendar_invitees
 		.map((i) => i.name ?? i.email)
@@ -296,9 +325,8 @@ export function meetingToBulletPoints(
 	if (names) lines.push(`\t- Attendees: ${names}`);
 
 	if (summary?.markdown_formatted) {
-		// Pull out just the first paragraph as a brief summary line
 		const firstPara = summary.markdown_formatted.split("\n\n")[0]?.trim();
-		if (firstPara) lines.push(`\t- ${firstPara}`);
+		if (firstPara) lines.push(`\t- ${stripMarkdown(firstPara)}`);
 	}
 
 	const actionItems = meeting.action_items ?? [];
