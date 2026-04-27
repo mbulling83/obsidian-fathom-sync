@@ -1,5 +1,5 @@
-import { Editor, MarkdownView, Notice, Plugin, TFile, normalizePath, FileManager } from "obsidian";
-import { DEFAULT_SETTINGS, FathomSyncSettings, FathomSyncSettingTab } from "./settings";
+import { Editor, MarkdownView, Notice, Plugin, TFile, normalizePath } from "obsidian";
+import { DEFAULT_SETTINGS, FathomSyncSettings, FathomSyncSettingTab, SECRET_STORAGE_ID } from "./settings";
 import {
 	FathomApiError,
 	FathomClient,
@@ -52,7 +52,7 @@ export default class FathomSyncPlugin extends Plugin {
 
 		// Sync on startup (after layout is ready so vault is available)
 		this.app.workspace.onLayoutReady(() => {
-			if (this.settings.syncOnStartup && this.settings.apiKey) {
+			if (this.settings.syncOnStartup && this.getApiKey()) {
 				this.syncAllMeetings(true);
 			}
 			this.rescheduleAutoSync();
@@ -75,10 +75,18 @@ export default class FathomSyncPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
+	getApiKey(): string {
+		if (this.settings.useSecureStorage) {
+			return (this.app as unknown as { secretStorage: { getSecret(id: string): string | null } })
+				.secretStorage.getSecret(SECRET_STORAGE_ID) ?? "";
+		}
+		return this.settings.apiKey;
+	}
+
 	rescheduleAutoSync() {
 		this.clearAutoSync();
 		const minutes = this.settings.autoSyncIntervalMinutes;
-		if (minutes > 0 && this.settings.apiKey) {
+		if (minutes > 0 && this.getApiKey()) {
 			const ms = minutes * 60 * 1000;
 			// Store raw timer ID so clearAutoSync can cancel it correctly.
 			// Also pass it through registerInterval so Obsidian cleans up on unload.
@@ -97,14 +105,14 @@ export default class FathomSyncPlugin extends Plugin {
 	// --- Commands ---
 
 	async syncAllMeetings(silent = false) {
-		if (!this.settings.apiKey) {
+		if (!this.getApiKey()) {
 			if (!silent) new Notice("Please configure your Fathom API key in settings.");
 			return;
 		}
 
 		const loading = silent ? null : new LoadingModal("Fathom: Fetching meetings…");
 		try {
-			const client = new FathomClient(this.settings.apiKey);
+			const client = new FathomClient(this.getApiKey());
 			const meetings = await client.listAllMeetings({
 				includeSummary: true,
 				includeActionItems: this.settings.includeActionItems,
@@ -140,14 +148,14 @@ export default class FathomSyncPlugin extends Plugin {
 	}
 
 	private async openMeetingPicker(action?: MeetingPickAction, editor?: Editor) {
-		if (!this.settings.apiKey) {
+		if (!this.getApiKey()) {
 			new Notice("Please configure your Fathom API key in settings.");
 			return;
 		}
 
 		const loading = new LoadingModal("Fathom: Loading meetings…");
 		try {
-			const client = new FathomClient(this.settings.apiKey);
+			const client = new FathomClient(this.getApiKey());
 			const meetings = await client.listAllMeetings({ includeSummary: false });
 			loading.close();
 
@@ -180,7 +188,7 @@ export default class FathomSyncPlugin extends Plugin {
 	) {
 		const loading = new LoadingModal(`Fathom: Loading "${meetingDisplayTitle(meeting)}"…`);
 		try {
-			const client = new FathomClient(this.settings.apiKey);
+			const client = new FathomClient(this.getApiKey());
 			const [summary, transcript] = await Promise.all([
 				client.getMeetingSummary(meeting.recording_id).catch(() => null),
 				this.settings.includeTranscript

@@ -1,11 +1,22 @@
-import { App, Notice, PluginSettingTab, Setting } from "obsidian";
+import { App, ButtonComponent, Notice, PluginSettingTab, SecretComponent, Setting } from "obsidian";
+
+type AppWithSecretStorage = App & {
+	secretStorage: {
+		getSecret(id: string): string | null;
+		setSecret(id: string, value: string): void;
+	};
+};
 import type FathomSyncPlugin from "./main";
 import { FathomClient } from "./fathom-api";
 
 export type AutoSyncInterval = 0 | 15 | 30 | 60 | 120 | 240;
 
+export const SECRET_STORAGE_ID = "fathom-api-key";
+
 export interface FathomSyncSettings {
+	// apiKey is only populated when useSecureStorage is false
 	apiKey: string;
+	useSecureStorage: boolean;
 	syncFolder: string;
 	includeTranscript: boolean;
 	includeActionItems: boolean;
@@ -17,6 +28,7 @@ export interface FathomSyncSettings {
 
 export const DEFAULT_SETTINGS: FathomSyncSettings = {
 	apiKey: "",
+	useSecureStorage: false,
 	syncFolder: "Meetings/Fathom",
 	includeTranscript: false,
 	includeActionItems: true,
@@ -35,6 +47,10 @@ const INTERVAL_OPTIONS: Record<AutoSyncInterval, string> = {
 	240: "Every 4 hours",
 };
 
+function hasSecretStorage(app: App): app is AppWithSecretStorage {
+	return typeof (app as unknown as { secretStorage?: { setSecret?: unknown } }).secretStorage?.setSecret === "function";
+}
+
 export class FathomSyncSettingTab extends PluginSettingTab {
 	plugin: FathomSyncPlugin;
 
@@ -47,53 +63,100 @@ export class FathomSyncSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		new Setting(containerEl)
-			.setName("Fathom API key")
-			.setDesc(
-				createFragment((frag) => {
-					frag.appendText("Your Fathom API key. Find it at ");
-					frag.createEl("a", {
-						text: "app.fathom.video → Settings → API",
-						href: "https://app.fathom.video/settings/api",
-					});
-					frag.appendText(".");
-				}),
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder("fathom_...")
-					.setValue(this.plugin.settings.apiKey)
-					.then((t) => {
-						t.inputEl.type = "password";
-						t.inputEl.style.width = "100%";
-					})
-					.onChange(async (value) => {
-						this.plugin.settings.apiKey = value.trim();
-						await this.plugin.saveSettings();
-					}),
-			)
-			.addButton((btn) => {
-				btn
-					.setButtonText("Test connection")
-					.setCta()
-					.onClick(async () => {
-						btn.setButtonText("Testing…").setDisabled(true);
-						btn.buttonEl.removeClass("fathom-btn-connected");
-						try {
-							const client = new FathomClient(this.plugin.settings.apiKey);
-							await client.listMeetings({ includeSummary: false });
-							btn.setButtonText("✓ Connected");
-							btn.buttonEl.addClass("fathom-btn-connected");
-						} catch (e) {
-							btn.setButtonText("Test connection").removeCta();
-							btn.setCta();
-							new Notice(`✗ Connection failed: ${e instanceof Error ? e.message : String(e)}`);
-						} finally {
-							btn.setDisabled(false);
-						}
-					});
-			});
+		const secureStorageAvailable = hasSecretStorage(this.app);
 
+		// --- API key (plain text, shown when secure storage is off) ---
+		if (!this.plugin.settings.useSecureStorage) {
+			new Setting(containerEl)
+				.setName("Fathom API key")
+				.setDesc(
+					createFragment((frag) => {
+						frag.appendText("Your Fathom API key. Find it at ");
+						frag.createEl("a", {
+							text: "app.fathom.video → Settings → API",
+							href: "https://app.fathom.video/settings/api",
+						});
+						frag.appendText(".");
+					}),
+				)
+				.addText((text) =>
+					text
+						.setPlaceholder("fathom_...")
+						.setValue(this.plugin.settings.apiKey)
+						.then((t) => {
+							t.inputEl.type = "password";
+							t.inputEl.style.width = "100%";
+						})
+						.onChange(async (value) => {
+							this.plugin.settings.apiKey = value.trim();
+							await this.plugin.saveSettings();
+						}),
+				)
+				.addButton((btn) => this.addTestButton(btn));
+		}
+
+		// --- API key (secure storage, shown when secure storage is on) ---
+		if (this.plugin.settings.useSecureStorage && secureStorageAvailable) {
+			new Setting(containerEl)
+				.setName("Fathom API key")
+				.setDesc(
+					createFragment((frag) => {
+						frag.appendText("Stored in Obsidian's secure storage. Find your key at ");
+						frag.createEl("a", {
+							text: "app.fathom.video → Settings → API",
+							href: "https://app.fathom.video/settings/api",
+						});
+						frag.appendText(".");
+					}),
+				)
+				.addButton((btn) => this.addTestButton(btn))
+				.then((setting) => {
+					const secret = new SecretComponent(this.app, setting.controlEl);
+					const currentKey = (this.app as AppWithSecretStorage).secretStorage.getSecret(SECRET_STORAGE_ID) ?? "";
+					secret.setValue(currentKey).onChange(async (value) => {
+						(this.app as AppWithSecretStorage).secretStorage.setSecret(SECRET_STORAGE_ID, value.trim());
+					});
+				});
+		}
+
+		// --- Secure storage toggle (only shown if available) ---
+		if (secureStorageAvailable) {
+			new Setting(containerEl)
+				.setName("Use Obsidian secure storage")
+				.setDesc(
+					"Store your API key in Obsidian's secure storage instead of the plugin data file. " +
+					"Toggling this will migrate your key automatically.",
+				)
+				.addToggle((toggle) =>
+					toggle
+						.setValue(this.plugin.settings.useSecureStorage)
+						.onChange(async (enable) => {
+							if (enable) {
+								// Migrate key from settings → secure storage
+								if (this.plugin.settings.apiKey) {
+									(this.app as AppWithSecretStorage).secretStorage.setSecret(
+										SECRET_STORAGE_ID,
+										this.plugin.settings.apiKey,
+									);
+									this.plugin.settings.apiKey = "";
+								}
+							} else {
+								// Migrate key from secure storage → settings
+								const stored = (this.app as AppWithSecretStorage).secretStorage.getSecret(SECRET_STORAGE_ID) ?? "";
+								this.plugin.settings.apiKey = stored;
+								if (stored) {
+									(this.app as AppWithSecretStorage).secretStorage.setSecret(SECRET_STORAGE_ID, "");
+								}
+							}
+							this.plugin.settings.useSecureStorage = enable;
+							await this.plugin.saveSettings();
+							// Re-render to show the correct key input
+							this.display();
+						}),
+				);
+		}
+
+		// --- Sync settings ---
 		new Setting(containerEl)
 			.setName("Sync folder")
 			.setDesc("Vault folder where synced meeting notes will be saved. Will be created if it doesn't exist.")
@@ -174,5 +237,26 @@ export class FathomSyncSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 				}),
 			);
+	}
+
+	private addTestButton(btn: ButtonComponent) {
+		btn
+			.setButtonText("Test connection")
+			.setCta()
+			.onClick(async () => {
+				btn.setButtonText("Testing…").setDisabled(true);
+				btn.buttonEl.removeClass("fathom-btn-connected");
+				try {
+					const client = new FathomClient(this.plugin.getApiKey());
+					await client.listMeetings({ includeSummary: false });
+					btn.setButtonText("✓ Connected");
+					btn.buttonEl.addClass("fathom-btn-connected");
+				} catch (e) {
+					btn.setButtonText("Test connection").removeCta().setCta();
+					new Notice(`✗ Connection failed: ${e instanceof Error ? e.message : String(e)}`);
+				} finally {
+					btn.setDisabled(false);
+				}
+			});
 	}
 }
