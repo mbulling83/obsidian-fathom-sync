@@ -1,0 +1,10 @@
+{
+	"id": "obsidian-fathom-sync",
+	"name": "Fathom Meeting Sync",
+	"version": "1.0.0",
+	"minAppVersion": "0.15.0",
+	"description": "Sync meeting notes from Fathom into your Obsidian vault.",
+	"author": "Mark Bulling",
+	"authorUrl": "",
+	"isDesktopOnly": true
+}

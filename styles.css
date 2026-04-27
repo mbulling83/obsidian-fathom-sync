@@ -1,0 +1,22 @@
+.fathom-meeting-suggestion {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 6px 8px;
+}
+
+.fathom-suggestion-title {
+	font-weight: 600;
+	font-size: 0.95em;
+}
+
+.fathom-suggestion-meta {
+	font-size: 0.8em;
+	color: var(--text-muted);
+}
+
+.fathom-suggestion-attendees {
+	font-size: 0.78em;
+	color: var(--text-faint);
+	font-style: italic;
+}
