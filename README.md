@@ -87,3 +87,7 @@ Set an interval in settings and the plugin will sync silently in the background.
 ## Note format
 
 Each synced meeting note includes YAML frontmatter (`date`, `time`, `duration`, `attendees`, `fathom_id`, `fathom_url`) followed by Attendees, Summary, and Action Items sections. Transcripts are included if enabled.
+
+## Privacy & network use
+
+This plugin connects exclusively to `api.fathom.ai` to fetch your meeting recordings, summaries, transcripts, and action items using your API key. All requests are read-only. No data from your vault is ever sent to Fathom or any other service. Your API key is stored locally in Obsidian's plugin data folder and is never transmitted anywhere other than the Fathom API.

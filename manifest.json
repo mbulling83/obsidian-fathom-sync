@@ -5,6 +5,6 @@
 	"minAppVersion": "0.15.0",
 	"description": "Sync meeting notes from Fathom into your Obsidian vault.",
 	"author": "Mark Bulling",
-	"authorUrl": "",
+	"authorUrl": "https://github.com/mbulling83",
 	"isDesktopOnly": true
 }

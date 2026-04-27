@@ -1,4 +1,4 @@
-import { Editor, MarkdownView, Notice, Plugin, TFile, normalizePath } from "obsidian";
+import { Editor, MarkdownView, Notice, Plugin, TFile, normalizePath, FileManager } from "obsidian";
 import { DEFAULT_SETTINGS, FathomSyncSettings, FathomSyncSettingTab } from "./settings";
 import {
 	FathomApiError,
@@ -8,6 +8,7 @@ import {
 	FathomTranscriptItem,
 	formatMeetingDate,
 	meetingDisplayTitle,
+	meetingFrontmatterData,
 	meetingToBulletPoints,
 	meetingToFullNote,
 } from "./fathom-api";
@@ -138,41 +139,38 @@ export default class FathomSyncPlugin extends Plugin {
 		}
 	}
 
-	private openMeetingPicker(action?: MeetingPickAction, editor?: Editor) {
+	private async openMeetingPicker(action?: MeetingPickAction, editor?: Editor) {
 		if (!this.settings.apiKey) {
 			new Notice("Please configure your Fathom API key in settings.");
 			return;
 		}
 
 		const loading = new LoadingModal("Fathom: Loading meetings…");
-		const client = new FathomClient(this.settings.apiKey);
+		try {
+			const client = new FathomClient(this.settings.apiKey);
+			const meetings = await client.listAllMeetings({ includeSummary: false });
+			loading.close();
 
-		client
-			.listAllMeetings({ includeSummary: false })
-			.then((meetings) => {
-				loading.close();
+			if (meetings.length === 0) {
+				new Notice("No Fathom meetings found.");
+				return;
+			}
 
-				if (meetings.length === 0) {
-					new Notice("No Fathom meetings found.");
-					return;
-				}
-
-				if (action) {
-					new MeetingPickerModal(this.app, meetings, action, (result) => {
+			if (action) {
+				new MeetingPickerModal(this.app, meetings, action, (result) => {
+					this.handleMeetingPick(result.meeting, result.action, editor);
+				}).open();
+			} else {
+				new ActionPickerModal(this.app, (chosenAction) => {
+					new MeetingPickerModal(this.app, meetings, chosenAction, (result) => {
 						this.handleMeetingPick(result.meeting, result.action, editor);
 					}).open();
-				} else {
-					new ActionPickerModal(this.app, (chosenAction) => {
-						new MeetingPickerModal(this.app, meetings, chosenAction, (result) => {
-							this.handleMeetingPick(result.meeting, result.action, editor);
-						}).open();
-					}).open();
-				}
-			})
-			.catch((e) => {
-				loading.close();
-				this.handleApiError(e);
-			});
+				}).open();
+			}
+		} catch (e) {
+			loading.close();
+			this.handleApiError(e);
+		}
 	}
 
 	private async handleMeetingPick(
@@ -251,7 +249,8 @@ export default class FathomSyncPlugin extends Plugin {
 				? await client.getMeetingTranscript(meeting.recording_id).catch(() => null)
 				: null;
 
-		await this.app.vault.create(filePath, meetingToFullNote(meeting, summary, transcript));
+		const file = await this.app.vault.create(filePath, meetingToFullNote(meeting, summary, transcript));
+		await this.applyFrontmatter(file, meeting);
 		return "created";
 	}
 
@@ -270,11 +269,24 @@ export default class FathomSyncPlugin extends Plugin {
 
 		const content = meetingToFullNote(meeting, summary, transcript);
 		const existing = this.app.vault.getAbstractFileByPath(filePath);
+		let file: TFile;
 		if (existing instanceof TFile) {
 			await this.app.vault.modify(existing, content);
-			return existing;
+			file = existing;
+		} else {
+			file = await this.app.vault.create(filePath, content);
 		}
-		return this.app.vault.create(filePath, content);
+		await this.applyFrontmatter(file, meeting);
+		return file;
+	}
+
+	private async applyFrontmatter(file: TFile, meeting: FathomMeeting) {
+		const data = meetingFrontmatterData(meeting);
+		await this.app.fileManager.processFrontMatter(file, (fm) => {
+			for (const [key, value] of Object.entries(data)) {
+				fm[key] = value;
+			}
+		});
 	}
 
 	private buildFilePath(meeting: FathomMeeting): string {

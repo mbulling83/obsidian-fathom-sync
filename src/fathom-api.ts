@@ -212,12 +212,29 @@ export function meetingDisplayTitle(meeting: FathomMeeting): string {
 	return meeting.title || meeting.meeting_title || "Untitled Meeting";
 }
 
-function yamlQuote(value: string): string {
-	// Quote if value contains characters that would break YAML
-	if (/[:#\[\]{},&*!|>'"%@`\n]/.test(value) || value.trim() !== value) {
-		return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
-	}
-	return value;
+export function meetingFrontmatterData(
+	meeting: FathomMeeting,
+): Record<string, unknown> {
+	const date = formatMeetingDate(meeting);
+	const time = formatMeetingTime(meeting);
+	const duration = formatDuration(meeting);
+
+	const fm: Record<string, unknown> = {
+		date,
+		time,
+		fathom_id: meeting.recording_id,
+		fathom_url: meeting.url,
+		recorded_by: meeting.recorded_by.name,
+	};
+
+	if (duration) fm["duration"] = duration;
+
+	const inviteeNames = meeting.calendar_invitees
+		.map((i) => i.name ?? i.email ?? "Unknown")
+		.filter(Boolean);
+	if (inviteeNames.length > 0) fm["attendees"] = inviteeNames;
+
+	return fm;
 }
 
 function stripMarkdown(text: string): string {
@@ -232,30 +249,10 @@ export function meetingToFullNote(
 	summary: FathomSummary | null,
 	transcript: FathomTranscriptItem[] | null,
 ): string {
-	const date = formatMeetingDate(meeting);
-	const time = formatMeetingTime(meeting);
-	const duration = formatDuration(meeting);
 	const title = meetingDisplayTitle(meeting);
-
 	const lines: string[] = [];
 
 	lines.push(`# ${title}`);
-	lines.push("");
-	lines.push("---");
-	lines.push(`date: ${date}`);
-	lines.push(`time: ${yamlQuote(time)}`);
-	if (duration) lines.push(`duration: ${duration}`);
-	const inviteeNames = meeting.calendar_invitees
-		.map((i) => i.name ?? i.email ?? "Unknown")
-		.filter(Boolean);
-	if (inviteeNames.length > 0) {
-		const quotedNames = inviteeNames.map(yamlQuote).join(", ");
-		lines.push(`attendees: [${quotedNames}]`);
-	}
-	lines.push(`recorded_by: ${yamlQuote(meeting.recorded_by.name)}`);
-	lines.push(`fathom_id: ${meeting.recording_id}`);
-	lines.push(`fathom_url: ${yamlQuote(meeting.url)}`);
-	lines.push("---");
 	lines.push("");
 
 	if (meeting.calendar_invitees.length > 0) {
