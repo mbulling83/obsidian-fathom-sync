@@ -2,49 +2,72 @@ import { requestUrl } from "obsidian";
 
 const FATHOM_API_BASE = "https://api.fathom.ai/external/v1";
 
-export interface FathomMeeting {
-	id: string;
-	recording_id: string;
-	title: string;
-	created_at: string;
-	started_at?: string;
-	ended_at?: string;
-	duration_seconds?: number;
-	attendees?: FathomAttendee[];
-	summary?: FathomSummary;
-	transcript?: FathomTranscriptItem[];
-	action_items?: FathomActionItem[];
+export interface FathomUser {
+	name: string;
+	email: string;
+	email_domain: string;
+	team: string | null;
 }
 
-export interface FathomAttendee {
-	name: string;
-	email?: string;
+export interface FathomInvitee {
+	name: string | null;
+	matched_speaker_display_name: string | null;
+	email: string | null;
+	email_domain: string | null;
+	is_external: boolean;
 }
 
 export interface FathomSummary {
-	short_summary?: string;
-	long_summary?: string;
-	keywords?: string[];
-	topics?: string[];
-	action_items?: FathomActionItem[];
+	template_name: string | null;
+	markdown_formatted: string | null;
 }
 
 export interface FathomTranscriptItem {
-	speaker: string;
-	start_time: number;
-	end_time: number;
+	speaker: {
+		display_name: string;
+		matched_calendar_invitee_email: string | null;
+	};
 	text: string;
+	timestamp: string;
 }
 
 export interface FathomActionItem {
-	text: string;
-	assignee?: string;
-	due_date?: string;
+	description: string;
+	user_generated: boolean;
+	completed: boolean;
+	recording_timestamp: string;
+	recording_playback_url: string;
+	assignee: {
+		name: string | null;
+		email: string | null;
+		team: string | null;
+	};
+}
+
+export interface FathomMeeting {
+	recording_id: number;
+	title: string;
+	meeting_title: string | null;
+	url: string;
+	share_url: string;
+	created_at: string;
+	scheduled_start_time: string;
+	scheduled_end_time: string;
+	recording_start_time: string;
+	recording_end_time: string;
+	calendar_invitees_domains_type: "only_internal" | "one_or_more_external";
+	recorded_by: FathomUser;
+	transcript_language: string;
+	calendar_invitees: FathomInvitee[];
+	transcript?: FathomTranscriptItem[] | null;
+	default_summary?: FathomSummary | null;
+	action_items?: FathomActionItem[] | null;
 }
 
 export interface FathomMeetingListResponse {
-	meetings: FathomMeeting[];
-	next_cursor?: string;
+	items: FathomMeeting[];
+	next_cursor: string | null;
+	limit: number | null;
 }
 
 export class FathomApiError extends Error {
@@ -97,6 +120,7 @@ export class FathomClient {
 		createdBefore?: string;
 		includeSummary?: boolean;
 		includeActionItems?: boolean;
+		includeTranscript?: boolean;
 	} = {}): Promise<FathomMeetingListResponse> {
 		const params: Record<string, string> = {};
 		if (options.cursor) params["cursor"] = options.cursor;
@@ -104,6 +128,7 @@ export class FathomClient {
 		if (options.createdBefore) params["created_before"] = options.createdBefore;
 		if (options.includeSummary) params["include_summary"] = "true";
 		if (options.includeActionItems) params["include_action_items"] = "true";
+		if (options.includeTranscript) params["include_transcript"] = "true";
 
 		return this.request<FathomMeetingListResponse>("/meetings", params);
 	}
@@ -112,6 +137,7 @@ export class FathomClient {
 		createdAfter?: string;
 		includeSummary?: boolean;
 		includeActionItems?: boolean;
+		includeTranscript?: boolean;
 		onPage?: (count: number) => void;
 	} = {}): Promise<FathomMeeting[]> {
 		const allMeetings: FathomMeeting[] = [];
@@ -123,108 +149,111 @@ export class FathomClient {
 				createdAfter: options.createdAfter,
 				includeSummary: options.includeSummary,
 				includeActionItems: options.includeActionItems,
+				includeTranscript: options.includeTranscript,
 			});
 
-			allMeetings.push(...response.meetings);
-			cursor = response.next_cursor;
+			allMeetings.push(...response.items);
+			cursor = response.next_cursor ?? undefined;
 
-			if (options.onPage) {
-				options.onPage(allMeetings.length);
-			}
+			if (options.onPage) options.onPage(allMeetings.length);
 		} while (cursor);
 
 		return allMeetings;
 	}
 
-	async getMeetingSummary(recordingId: string): Promise<FathomSummary> {
-		const response = await this.request<{ summary: FathomSummary }>(
+	async getMeetingSummary(recordingId: number): Promise<FathomSummary | null> {
+		const response = await this.request<{ summary?: FathomSummary }>(
 			`/recordings/${recordingId}/summary`,
 		);
-		return response.summary;
+		return response.summary ?? null;
 	}
 
-	async getMeetingTranscript(recordingId: string): Promise<FathomTranscriptItem[]> {
-		const response = await this.request<{ transcript: FathomTranscriptItem[] }>(
+	async getMeetingTranscript(recordingId: number): Promise<FathomTranscriptItem[]> {
+		const response = await this.request<{ transcript?: FathomTranscriptItem[] }>(
 			`/recordings/${recordingId}/transcript`,
 		);
-		return response.transcript;
+		return response.transcript ?? [];
 	}
 }
 
 export function formatMeetingDate(meeting: FathomMeeting): string {
-	const date = new Date(meeting.started_at ?? meeting.created_at);
+	const date = new Date(meeting.recording_start_time ?? meeting.created_at);
 	return date.toISOString().split("T")[0] ?? "";
 }
 
 export function formatMeetingTime(meeting: FathomMeeting): string {
-	const date = new Date(meeting.started_at ?? meeting.created_at);
+	const date = new Date(meeting.recording_start_time ?? meeting.created_at);
 	return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
-export function formatDuration(seconds: number): string {
-	const h = Math.floor(seconds / 3600);
-	const m = Math.floor((seconds % 3600) / 60);
+export function formatDuration(meeting: FathomMeeting): string {
+	const start = new Date(meeting.recording_start_time).getTime();
+	const end = new Date(meeting.recording_end_time).getTime();
+	const totalSeconds = Math.round((end - start) / 1000);
+	const h = Math.floor(totalSeconds / 3600);
+	const m = Math.floor((totalSeconds % 3600) / 60);
 	if (h > 0) return `${h}h ${m}m`;
 	return `${m}m`;
 }
 
-export function meetingToFullNote(meeting: FathomMeeting, summary: FathomSummary | null, transcript: FathomTranscriptItem[] | null): string {
+export function meetingDisplayTitle(meeting: FathomMeeting): string {
+	return meeting.title || meeting.meeting_title || "Untitled Meeting";
+}
+
+export function meetingToFullNote(
+	meeting: FathomMeeting,
+	summary: FathomSummary | null,
+	transcript: FathomTranscriptItem[] | null,
+): string {
 	const date = formatMeetingDate(meeting);
 	const time = formatMeetingTime(meeting);
-	const duration = meeting.duration_seconds ? formatDuration(meeting.duration_seconds) : "";
+	const duration = formatDuration(meeting);
+	const title = meetingDisplayTitle(meeting);
 
 	const lines: string[] = [];
 
-	lines.push(`# ${meeting.title || "Untitled Meeting"}`);
+	lines.push(`# ${title}`);
 	lines.push("");
 	lines.push("---");
 	lines.push(`date: ${date}`);
 	lines.push(`time: ${time}`);
-	if (duration) lines.push(`duration: ${duration}`);
-	if (meeting.attendees && meeting.attendees.length > 0) {
-		const names = meeting.attendees.map((a) => a.name).join(", ");
-		lines.push(`attendees: [${names}]`);
+	lines.push(`duration: ${duration}`);
+	const inviteeNames = meeting.calendar_invitees
+		.map((i) => i.name ?? i.email ?? "Unknown")
+		.filter(Boolean);
+	if (inviteeNames.length > 0) {
+		lines.push(`attendees: [${inviteeNames.join(", ")}]`);
 	}
-	lines.push(`fathom_id: ${meeting.id}`);
+	lines.push(`recorded_by: ${meeting.recorded_by.name}`);
+	lines.push(`fathom_id: ${meeting.recording_id}`);
+	lines.push(`fathom_url: ${meeting.url}`);
 	lines.push("---");
 	lines.push("");
 
-	if (meeting.attendees && meeting.attendees.length > 0) {
+	if (meeting.calendar_invitees.length > 0) {
 		lines.push("## Attendees");
-		for (const a of meeting.attendees) {
-			lines.push(`- ${a.name}${a.email ? ` (${a.email})` : ""}`);
+		for (const i of meeting.calendar_invitees) {
+			const name = i.name ?? i.email ?? "Unknown";
+			const email = i.email ? ` (${i.email})` : "";
+			const ext = i.is_external ? " 🌐" : "";
+			lines.push(`- ${name}${email}${ext}`);
 		}
 		lines.push("");
 	}
 
-	if (summary) {
-		if (summary.short_summary) {
-			lines.push("## Summary");
-			lines.push(summary.short_summary);
-			lines.push("");
-		}
-
-		if (summary.long_summary) {
-			lines.push("## Details");
-			lines.push(summary.long_summary);
-			lines.push("");
-		}
-
-		if (summary.topics && summary.topics.length > 0) {
-			lines.push("## Topics");
-			for (const topic of summary.topics) {
-				lines.push(`- ${topic}`);
-			}
-			lines.push("");
-		}
+	if (summary?.markdown_formatted) {
+		lines.push("## Summary");
+		lines.push(summary.markdown_formatted);
+		lines.push("");
 	}
 
-	const actionItems = summary?.action_items ?? meeting.action_items ?? [];
+	const actionItems = meeting.action_items ?? [];
 	if (actionItems.length > 0) {
 		lines.push("## Action Items");
 		for (const item of actionItems) {
-			const assignee = item.assignee ? ` *(${item.assignee})*` : "";
-			lines.push(`- [ ] ${item.text}${assignee}`);
+			const check = item.completed ? "x" : " ";
+			const assignee = item.assignee.name ? ` *(${item.assignee.name})*` : "";
+			lines.push(`- [${check}] ${item.description}${assignee}`);
 		}
 		lines.push("");
 	}
@@ -234,9 +263,10 @@ export function meetingToFullNote(meeting: FathomMeeting, summary: FathomSummary
 		lines.push("");
 		let lastSpeaker = "";
 		for (const item of transcript) {
-			if (item.speaker !== lastSpeaker) {
-				lines.push(`**${item.speaker}**`);
-				lastSpeaker = item.speaker;
+			const speaker = item.speaker.display_name;
+			if (speaker !== lastSpeaker) {
+				lines.push(`**${speaker}** *${item.timestamp}*`);
+				lastSpeaker = speaker;
 			}
 			lines.push(item.text);
 			lines.push("");
@@ -246,30 +276,38 @@ export function meetingToFullNote(meeting: FathomMeeting, summary: FathomSummary
 	return lines.join("\n");
 }
 
-export function meetingToBulletPoints(meeting: FathomMeeting, summary: FathomSummary | null): string {
+export function meetingToBulletPoints(
+	meeting: FathomMeeting,
+	summary: FathomSummary | null,
+): string {
 	const date = formatMeetingDate(meeting);
 	const time = formatMeetingTime(meeting);
-	const duration = meeting.duration_seconds ? ` (${formatDuration(meeting.duration_seconds)})` : "";
+	const duration = formatDuration(meeting);
+	const title = meetingDisplayTitle(meeting);
 
 	const lines: string[] = [];
 
-	lines.push(`- **${meeting.title || "Untitled Meeting"}** — ${date} at ${time}${duration}`);
+	lines.push(`- **${title}** — ${date} at ${time} (${duration})`);
 
-	if (meeting.attendees && meeting.attendees.length > 0) {
-		const names = meeting.attendees.map((a) => a.name).join(", ");
-		lines.push(`\t- Attendees: ${names}`);
+	const names = meeting.calendar_invitees
+		.map((i) => i.name ?? i.email)
+		.filter(Boolean)
+		.join(", ");
+	if (names) lines.push(`\t- Attendees: ${names}`);
+
+	if (summary?.markdown_formatted) {
+		// Pull out just the first paragraph as a brief summary line
+		const firstPara = summary.markdown_formatted.split("\n\n")[0]?.trim();
+		if (firstPara) lines.push(`\t- ${firstPara}`);
 	}
 
-	if (summary?.short_summary) {
-		lines.push(`\t- ${summary.short_summary}`);
-	}
-
-	const actionItems = summary?.action_items ?? meeting.action_items ?? [];
+	const actionItems = meeting.action_items ?? [];
 	if (actionItems.length > 0) {
 		lines.push("\t- Action items:");
 		for (const item of actionItems) {
-			const assignee = item.assignee ? ` *(${item.assignee})*` : "";
-			lines.push(`\t\t- [ ] ${item.text}${assignee}`);
+			const check = item.completed ? "x" : " ";
+			const assignee = item.assignee.name ? ` *(${item.assignee.name})*` : "";
+			lines.push(`\t\t- [${check}] ${item.description}${assignee}`);
 		}
 	}
 

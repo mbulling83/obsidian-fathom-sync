@@ -7,6 +7,7 @@ import {
 	FathomSummary,
 	FathomTranscriptItem,
 	formatMeetingDate,
+	meetingDisplayTitle,
 	meetingToBulletPoints,
 	meetingToFullNote,
 } from "./fathom-api";
@@ -19,6 +20,7 @@ import {
 
 export default class FathomSyncPlugin extends Plugin {
 	settings: FathomSyncSettings;
+	private autoSyncIntervalId: number | null = null;
 
 	async onload() {
 		await this.loadSettings();
@@ -45,9 +47,19 @@ export default class FathomSyncPlugin extends Plugin {
 			name: "Insert meeting as bullet points",
 			editorCallback: (editor: Editor) => this.openMeetingPicker("insert-bullets", editor),
 		});
+
+		// Sync on startup (after layout is ready so vault is available)
+		this.app.workspace.onLayoutReady(() => {
+			if (this.settings.syncOnStartup && this.settings.apiKey) {
+				this.syncAllMeetings(true);
+			}
+			this.rescheduleAutoSync();
+		});
 	}
 
-	onunload() {}
+	onunload() {
+		this.clearAutoSync();
+	}
 
 	async loadSettings() {
 		this.settings = Object.assign(
@@ -61,24 +73,42 @@ export default class FathomSyncPlugin extends Plugin {
 		await this.saveData(this.settings);
 	}
 
+	rescheduleAutoSync() {
+		this.clearAutoSync();
+		const minutes = this.settings.autoSyncIntervalMinutes;
+		if (minutes > 0 && this.settings.apiKey) {
+			const ms = minutes * 60 * 1000;
+			this.autoSyncIntervalId = this.registerInterval(
+				window.setInterval(() => this.syncAllMeetings(true), ms),
+			);
+		}
+	}
+
+	private clearAutoSync() {
+		if (this.autoSyncIntervalId !== null) {
+			window.clearInterval(this.autoSyncIntervalId);
+			this.autoSyncIntervalId = null;
+		}
+	}
+
 	// --- Commands ---
 
-	private async syncAllMeetings() {
+	async syncAllMeetings(silent = false) {
 		if (!this.settings.apiKey) {
-			new Notice("Please configure your Fathom API key in settings.");
+			if (!silent) new Notice("Please configure your Fathom API key in settings.");
 			return;
 		}
 
-		const loading = new LoadingModal("Fathom: Fetching meetings…");
+		const loading = silent ? null : new LoadingModal("Fathom: Fetching meetings…");
 		try {
 			const client = new FathomClient(this.settings.apiKey);
 			const meetings = await client.listAllMeetings({
 				includeSummary: true,
 				includeActionItems: this.settings.includeActionItems,
-				onPage: (count) => loading.update(`Fathom: Fetched ${count} meetings…`),
+				onPage: (count) => loading?.update(`Fathom: Fetched ${count} meetings…`),
 			});
 
-			loading.update(`Fathom: Syncing ${meetings.length} meetings…`);
+			loading?.update(`Fathom: Syncing ${meetings.length} meetings…`);
 
 			let synced = 0;
 			let skipped = 0;
@@ -87,13 +117,15 @@ export default class FathomSyncPlugin extends Plugin {
 				const existed = await this.syncMeetingToNote(client, meeting);
 				if (existed) skipped++;
 				else synced++;
-				loading.update(`Fathom: Synced ${synced}/${meetings.length}…`);
+				loading?.update(`Fathom: Synced ${synced}/${meetings.length}…`);
 			}
 
-			loading.close();
-			new Notice(`Fathom: Synced ${synced} meetings (${skipped} already up to date).`);
+			loading?.close();
+			if (!silent || synced > 0) {
+				new Notice(`Fathom: Synced ${synced} new meetings (${skipped} already up to date).`);
+			}
 		} catch (e) {
-			loading.close();
+			loading?.close();
 			this.handleApiError(e);
 		}
 	}
@@ -118,12 +150,10 @@ export default class FathomSyncPlugin extends Plugin {
 				}
 
 				if (action) {
-					// Action already known — go straight to meeting picker
 					new MeetingPickerModal(this.app, meetings, action, (result) => {
 						this.handleMeetingPick(result.meeting, result.action, editor);
 					}).open();
 				} else {
-					// Ask what to do first, then pick a meeting
 					new ActionPickerModal(this.app, (chosenAction) => {
 						new MeetingPickerModal(this.app, meetings, chosenAction, (result) => {
 							this.handleMeetingPick(result.meeting, result.action, editor);
@@ -142,7 +172,7 @@ export default class FathomSyncPlugin extends Plugin {
 		action: MeetingPickAction,
 		editor?: Editor,
 	) {
-		const loading = new LoadingModal(`Fathom: Loading "${meeting.title}"…`);
+		const loading = new LoadingModal(`Fathom: Loading "${meetingDisplayTitle(meeting)}"…`);
 		try {
 			const client = new FathomClient(this.settings.apiKey);
 			const [summary, transcript] = await Promise.all([
@@ -193,7 +223,6 @@ export default class FathomSyncPlugin extends Plugin {
 		const folderPath = normalizePath(this.settings.syncFolder);
 		const filePath = normalizePath(`${folderPath}/${filename}.md`);
 
-		// Ensure folder exists
 		if (!this.app.vault.getAbstractFileByPath(folderPath)) {
 			await this.app.vault.createFolder(folderPath);
 		}
@@ -203,7 +232,6 @@ export default class FathomSyncPlugin extends Plugin {
 			return existing;
 		}
 
-		// Fetch summary/transcript if not already provided
 		const summary =
 			summaryData !== undefined
 				? summaryData
@@ -228,11 +256,11 @@ export default class FathomSyncPlugin extends Plugin {
 
 	private buildFilename(meeting: FathomMeeting): string {
 		const date = formatMeetingDate(meeting);
-		const date_obj = new Date(meeting.started_at ?? meeting.created_at);
-		const time = date_obj
+		const dateObj = new Date(meeting.recording_start_time ?? meeting.created_at);
+		const time = dateObj
 			.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", hour12: false })
 			.replace(":", "-");
-		const title = (meeting.title ?? "Untitled Meeting")
+		const title = meetingDisplayTitle(meeting)
 			.replace(/[\\/:*?"<>|]/g, "-")
 			.replace(/\s+/g, " ")
 			.trim();
@@ -248,15 +276,12 @@ export default class FathomSyncPlugin extends Plugin {
 
 	private insertIntoEditor(editor: Editor | undefined, text: string) {
 		if (editor) {
-			const cursor = editor.getCursor();
-			editor.replaceRange(text + "\n", cursor);
+			editor.replaceRange(text + "\n", editor.getCursor());
 		} else {
 			const view = this.app.workspace.getActiveViewOfType(MarkdownView);
 			if (view?.editor) {
-				const cursor = view.editor.getCursor();
-				view.editor.replaceRange(text + "\n", cursor);
+				view.editor.replaceRange(text + "\n", view.editor.getCursor());
 			} else {
-				// Fallback: copy to clipboard
 				navigator.clipboard.writeText(text).then(() => {
 					new Notice("No active note — meeting copied to clipboard.");
 				});

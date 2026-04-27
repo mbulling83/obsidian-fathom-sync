@@ -1,6 +1,6 @@
 import { App, FuzzyMatch, FuzzySuggestModal, Notice } from "obsidian";
-import type { FathomMeeting, FathomSummary } from "./fathom-api";
-import { formatMeetingDate, formatMeetingTime, formatDuration } from "./fathom-api";
+import type { FathomMeeting } from "./fathom-api";
+import { formatMeetingDate, formatMeetingTime, formatDuration, meetingDisplayTitle } from "./fathom-api";
 
 export type MeetingPickAction = "insert-bullets" | "create-note" | "insert-bullets-and-link";
 
@@ -38,29 +38,29 @@ export class MeetingPickerModal extends FuzzySuggestModal<FathomMeeting> {
 
 	getItemText(meeting: FathomMeeting): string {
 		const date = formatMeetingDate(meeting);
-		const attendees = meeting.attendees?.map((a) => a.name).join(" ") ?? "";
-		return `${meeting.title ?? "Untitled Meeting"} ${date} ${attendees}`;
+		const attendees = meeting.calendar_invitees.map((i) => i.name ?? i.email ?? "").join(" ");
+		return `${meetingDisplayTitle(meeting)} ${date} ${attendees}`;
 	}
 
 	renderSuggestion(item: FuzzyMatch<FathomMeeting>, el: HTMLElement): void {
 		const meeting = item.item;
 		const date = formatMeetingDate(meeting);
 		const time = formatMeetingTime(meeting);
-		const duration = meeting.duration_seconds
-			? ` · ${formatDuration(meeting.duration_seconds)}`
-			: "";
+		const duration = ` · ${formatDuration(meeting)}`;
 
 		el.addClass("fathom-meeting-suggestion");
 
 		const titleEl = el.createDiv({ cls: "fathom-suggestion-title" });
-		titleEl.setText(meeting.title ?? "Untitled Meeting");
+		titleEl.setText(meetingDisplayTitle(meeting));
 
 		const metaEl = el.createDiv({ cls: "fathom-suggestion-meta" });
 		metaEl.setText(`${date} at ${time}${duration}`);
 
-		if (meeting.attendees && meeting.attendees.length > 0) {
+		if (meeting.calendar_invitees.length > 0) {
 			const attendeeEl = el.createDiv({ cls: "fathom-suggestion-attendees" });
-			attendeeEl.setText(meeting.attendees.map((a) => a.name).join(", "));
+			attendeeEl.setText(
+				meeting.calendar_invitees.map((i) => i.name ?? i.email ?? "Unknown").join(", "),
+			);
 		}
 	}
 
