@@ -13,7 +13,7 @@ npm run build        # type-check then production build → main.js
 After building, copy the output to the vault and reload:
 
 ```bash
-cp main.js "/Users/markbulling/Documents/lepus albus/.obsidian/plugins/obsidian-fathom-sync/main.js"
+cp main.js "/Users/markbulling/Documents/lepus albus/.obsidian/plugins/fathom-sync/main.js"
 obsidian plugin:reload id=fathom-sync
 ```
 

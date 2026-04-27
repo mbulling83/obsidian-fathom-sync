@@ -2,6 +2,8 @@
 
 An [Obsidian](https://obsidian.md) plugin that pulls your [Fathom](https://fathom.video) meeting notes directly into your vault — summaries, action items, attendees, and optional transcripts.
 
+> **Disclaimer:** This is an unofficial, community-built plugin. It is not affiliated with, endorsed by, or officially supported by Fathom Video, Inc. Fathom is a trademark of Fathom Video, Inc.
+
 ## Features
 
 - **Sync all recordings** — bulk sync every Fathom meeting to a folder in your vault
@@ -17,23 +19,23 @@ An [Obsidian](https://obsidian.md) plugin that pulls your [Fathom](https://fatho
 
 1. Install the [BRAT plugin](https://github.com/TfTHacker/obsidian42-brat) from Obsidian's Community Plugins
 2. Open BRAT settings → **Add Beta Plugin**
-3. Paste: `https://github.com/mbulling83/obsidian-fathom-sync`
+3. Paste: `https://github.com/mbulling83/fathom-sync`
 4. Click **Add Plugin**, then enable **Fathom Meeting Sync** in Community Plugins
 
 ### Manual installation
 
-1. Download the latest release from the [Releases page](https://github.com/mbulling83/obsidian-fathom-sync/releases)
+1. Download the latest release from the [Releases page](https://github.com/mbulling83/fathom-sync/releases)
 2. Extract and copy the three files (`main.js`, `manifest.json`, `styles.css`) into:
    ```
-   <your vault>/.obsidian/plugins/obsidian-fathom-sync/
+   <your vault>/.obsidian/plugins/fathom-sync/
    ```
 3. Reload Obsidian and enable **Fathom Meeting Sync** in Settings → Community Plugins
 
 ### Build from source
 
 ```bash
-git clone https://github.com/mbulling83/obsidian-fathom-sync
-cd obsidian-fathom-sync
+git clone https://github.com/mbulling83/fathom-sync
+cd fathom-sync
 npm install
 npm run build
 ```
@@ -76,6 +78,7 @@ Set an interval in settings and the plugin will sync silently in the background.
 | Setting | Default | Description |
 |---|---|---|
 | API key | — | Your Fathom API key |
+| Use Obsidian secure storage | Off | Store key in Obsidian's secure storage instead of data.json (requires Obsidian 1.11.4+) |
 | Sync folder | `Meetings/Fathom` | Vault folder for synced notes |
 | Filename template | `{{date}} {{title}}` | Variables: `{{date}}`, `{{time}}`, `{{title}}` |
 | Sync on startup | Off | Sync automatically when Obsidian opens |

@@ -1,5 +1,5 @@
 {
-	"name": "obsidian-fathom-sync",
+	"name": "fathom-sync",
 	"version": "1.0.0",
 	"description": "Sync Fathom meeting notes into Obsidian",
 	"main": "main.js",
