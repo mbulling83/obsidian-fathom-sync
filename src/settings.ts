@@ -47,11 +47,6 @@ export class FathomSyncSettingTab extends PluginSettingTab {
 		const { containerEl } = this;
 		containerEl.empty();
 
-		containerEl.createEl("h2", { text: "Fathom Meeting Sync" });
-
-		// --- Authentication ---
-		containerEl.createEl("h3", { text: "Authentication" });
-
 		new Setting(containerEl)
 			.setName("Fathom API key")
 			.setDesc(
@@ -94,9 +89,6 @@ export class FathomSyncSettingTab extends PluginSettingTab {
 						}
 					}),
 			);
-
-		// --- Sync settings ---
-		containerEl.createEl("h3", { text: "Sync settings" });
 
 		new Setting(containerEl)
 			.setName("Sync folder")
@@ -148,9 +140,6 @@ export class FathomSyncSettingTab extends PluginSettingTab {
 					this.plugin.rescheduleAutoSync();
 				});
 			});
-
-		// --- Content options ---
-		containerEl.createEl("h3", { text: "Note content" });
 
 		new Setting(containerEl)
 			.setName("Include transcript")
